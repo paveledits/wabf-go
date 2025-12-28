@@ -1,0 +1,21 @@
+# Binaries
+wabf
+*.exe
+*.dll
+*.so
+
+# Data
+wabf.db
+*.db
+*.sqlite
+avatars/
+*.csv
+*.vcf
+*.log
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
