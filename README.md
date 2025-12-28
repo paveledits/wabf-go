@@ -32,7 +32,7 @@ Prerequisites: [Go](https://go.dev/dl/) installed.
 
 ```bash
 # Clone the repository (or download the source)
-git clone <url>
+git clone https://github.com/paveledits/wabf-go
 cd wabf-go
 
 # Build the binary
