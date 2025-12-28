@@ -35,7 +35,7 @@ var (
 	outputFile   = flag.String("output-file", "", "Specify output file")
 	verbose      = flag.Bool("verbose", false, "Enable verbose logging")
 	reset        = flag.Bool("reset", false, "Reset session (log out) before starting")
-	delay        = flag.Duration("delay", 0, "Delay between checks (per worker)")
+	delay        = flag.Duration("delay", 200*time.Millisecond, "Delay between checks (per worker)")
 	concurrency  = flag.Int("concurrency", 1, "Number of parallel workers")
 	saveAvatars  = flag.Bool("save-avatars", false, "Download and save profile pictures")
 	vcardFile    = flag.String("vcard", "", "Export results to a VCard (.vcf) file")
@@ -70,7 +70,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -vcard <filename.vcf>\n")
 		fmt.Fprintf(os.Stderr, "        Export results to a VCard (.vcf) file\n")
 		fmt.Fprintf(os.Stderr, "  -delay <duration>\n")
-		fmt.Fprintf(os.Stderr, "        Delay between checks (per worker) (default 0ms)\n")
+		fmt.Fprintf(os.Stderr, "        Delay between checks (per worker) (default 200ms)\n")
 		fmt.Fprintf(os.Stderr, "  -save-avatars\n")
 		fmt.Fprintf(os.Stderr, "        Download and save profile pictures\n")
 		fmt.Fprintf(os.Stderr, "  -output-file <filename>\n")
@@ -435,9 +435,7 @@ func main() {
 }
 
 func checkJID(ctx context.Context, client *whatsmeow.Client, jid string) *ScanResult {
-	if *delay > 0 {
-		time.Sleep(*delay + time.Duration(rand.Intn(10))*time.Millisecond)
-	}
+	time.Sleep(*delay + time.Duration(rand.Intn(100))*time.Millisecond)
 
 	pn := strings.TrimSuffix(jid, "@c.us")
 	if pn == "" {
