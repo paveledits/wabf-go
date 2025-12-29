@@ -67,7 +67,7 @@ Basic usage:
 
 ### Examples
 
-**1. Scan a range of numbers rapidly:**
+**1. Scan a range of 10000 numbers rapidly with 5 workers:**
 ```bash
 ./wabf -concurrency 5 "1555123xxxx"
 ```
