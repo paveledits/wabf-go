@@ -1,5 +1,12 @@
 # WhatsApp Brute Forcer (Go)
 
+> [!CAUTION]
+> **USE AT YOUR OWN RISK.**  
+> Automated scanning of WhatsApp numbers violates their Terms of Service and **WILL** lead to your account being banned.  
+> *   **DO NOT** use your main personal account. Use a burner number.  
+> *   **DO NOT** use high concurrency or low delays if you want to keep the account alive longer.  
+> *   This tool is for educational and security research purposes only.
+
 A fast, robust, and feature-rich WhatsApp number scanner and bio fetcher, written in Go.
 
 This tool allows you to brute-force generate phone numbers based on a pattern, check if they are registered on WhatsApp, and fetch their public profile information (Status/About, Avatar, PushName, Business Info).
