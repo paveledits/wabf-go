@@ -2,23 +2,23 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
-	"regexp"
-	"encoding/csv"
-	"io"
-	"net/http"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
-	"math/rand"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal/v3"
@@ -47,7 +47,7 @@ type ScanResult struct {
 	Phone        string
 	Link         string
 	Status       string
-	Name         string 
+	Name         string
 	VerifiedName string
 	Business     *types.BusinessProfile
 	AvatarURL    string
@@ -62,7 +62,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  <phone_pattern>  Target Pattern (e.g. 15551234567[x] or +1 555 ...)\n")
 		fmt.Fprintf(os.Stderr, "                   Supports single numbers (e.g. +15551234567) too.\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
-		
+
 		fmt.Fprintf(os.Stderr, "  -concurrency <int>\n")
 		fmt.Fprintf(os.Stderr, "        Number of parallel workers (default 1)\n")
 		fmt.Fprintf(os.Stderr, "  -csv <filename.csv>\n")
@@ -120,7 +120,7 @@ func main() {
 	}
 
 	dbPath := "file:wabf.db?_foreign_keys=on"
-	
+
 	if *reset {
 		if !*verbose {
 			fmt.Println("[-] Resetting session (deleting wabf.db)...")
@@ -250,14 +250,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error generating JIDs: %v", err)
 	}
-	
+
 	if !*verbose {
 		fmt.Printf("[-] Generated %d numbers to check.\n", len(jids))
 		fmt.Println("[-] Starting scan...")
 	} else {
 		fmt.Printf("Generated %d possible JIDs. Starting brute force...\n", len(jids))
 	}
-
 
 	ctx := context.Background()
 
@@ -272,12 +271,11 @@ func main() {
 		}
 		defer fileOut.Close()
 	}
-	
 
 	jidChan := make(chan string, len(jids))
 	resultChan := make(chan ScanResult, len(jids))
 	var wg sync.WaitGroup
-	var checkedCount int64 
+	var checkedCount int64
 
 	if *concurrency < 1 {
 		*concurrency = 1
@@ -287,6 +285,7 @@ func main() {
 	}
 
 	totalJIDs := len(jids)
+	startTime := time.Now()
 
 	for w := 0; w < *concurrency; w++ {
 		wg.Add(1)
@@ -302,8 +301,12 @@ func main() {
 				current := atomic.AddInt64(&checkedCount, 1)
 				if !*verbose {
 					percent := float64(current) / float64(totalJIDs) * 100
+					elapsed := time.Since(startTime)
+					rate := float64(current) / elapsed.Seconds()
+					remaining := float64(len(jids) - int(current))
+					eta := time.Duration(remaining/rate) * time.Second
 					pn := strings.TrimSuffix(jid, "@c.us")
-					fmt.Printf("[%3.0f%%] Checked: %-15s\n", percent, pn)
+					fmt.Printf("[%3.0f%%] [ETA: %s] Checked: %-15s\n", percent, eta.Round(time.Second), pn)
 				}
 
 				res := checkJID(ctx, client, jid)
@@ -414,7 +417,7 @@ func main() {
 					name = res.Phone
 				}
 			}
-			vcard := fmt.Sprintf("BEGIN:VCARD\nVERSION:3.0\nFN:%s\nTEL;TYPE=CELL:%s\n", name, "+" + res.Phone)
+			vcard := fmt.Sprintf("BEGIN:VCARD\nVERSION:3.0\nFN:%s\nTEL;TYPE=CELL:%s\n", name, "+"+res.Phone)
 			if res.AvatarURL != "" {
 				vcard += fmt.Sprintf("URL:%s\n", res.AvatarURL)
 			}
@@ -441,7 +444,7 @@ func checkJID(ctx context.Context, client *whatsmeow.Client, jid string) *ScanRe
 	if pn == "" {
 		return nil
 	}
-	
+
 	resp, err := client.IsOnWhatsApp(ctx, []string{pn})
 	if err != nil {
 		if !*verbose {
@@ -477,7 +480,7 @@ func checkJID(ctx context.Context, client *whatsmeow.Client, jid string) *ScanRe
 				}
 			}
 		}
-		
+
 		biz, err := client.GetBusinessProfile(ctx, targetJID)
 		if err == nil {
 			res.Business = biz
@@ -581,7 +584,7 @@ func cartesianProduct(input [][]string) [][]string {
 func formatOutput(jid, format string) string {
 	pn := strings.TrimSuffix(jid, "@c.us")
 	cleanPN := strings.ReplaceAll(strings.ReplaceAll(pn, " ", ""), "+", "")
-	
+
 	switch format {
 	case "wa.me":
 		return "https://wa.me/" + cleanPN
