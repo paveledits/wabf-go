@@ -22,10 +22,10 @@ This tool allows you to brute-force generate phone numbers based on a pattern, c
         *   Example: `1555[12]xxxx` -> checks 20,000 numbers.
 *   **Parallel Scanning**: Ultra-fast scanning with concurrent workers (`-concurrency`).
 *   **Profile Intelligence**: Fetches:
-    *   ✅ **Status / About** text.
-    *   ✅ **Profile Pictures** (HD URLs).
-    *   ✅ **Push Names** (~Name) and Verified Business Names.
-    *   ✅ **Business Info** (Email, Website, Address).
+    *    **Status / About** text.
+    *    **Profile Pictures** (HD URLs).
+    *    **Push Names** (~Name) and Verified Business Names.
+    *    **Business Info** (Email, Website, Address).
 *   **Smart Exporting**:
     *   **CSV**: Export structured data for analysis.
     *   **VCard (.vcf)**: Generate contacts file to import directly into your phone.
