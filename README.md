@@ -2,7 +2,7 @@
 
 > [!CAUTION]
 > **USE AT YOUR OWN RISK.**  
-> Automated scanning of WhatsApp numbers violates their Terms of Service and **WILL** lead to your account being banned.  
+> Automated scanning of WhatsApp numbers violates their Terms of Service and **WILL** lead to your account being banned. (speaking from experience)  
 > *   **DO NOT** use your main personal account. Use a burner number.  
 > *   **DO NOT** use high concurrency or low delays if you want to keep the account alive longer.  
 > *   This tool is for educational and security research purposes only.
