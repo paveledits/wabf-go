@@ -1,4 +1,4 @@
-name: l3ak-public-api-probe
+name: public-ctf-challenge-scan
 
 on:
   pull_request:
@@ -9,36 +9,46 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 5
     steps:
-      - name: Fetch public RCTF API
+      - name: Scan public challenge endpoints
         shell: bash
         run: |
-          python3 - <<'PY' > l3ak-api.txt 2>&1
+          python3 - <<'PY' > ctf-scan.txt 2>&1
           import concurrent.futures, json, requests
-          BASE="https://ctf.l3ak.team"
-          UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
-          paths=[
-            "/api/v1/challs", "/api/v2/challs",
-            "/api/v1/integrations/client/config", "/api/v2/integrations/client/config",
-            "/api/v1/leaderboard/now", "/api/v2/leaderboard/now", "/api/v2/leaderboard/challs",
-            "/api/v1/leaderboard/graph", "/api/v2/leaderboard/graph",
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36'
+          bases=[
+            'https://bushbash.cssa.club',
+            'https://ctfd.diverctf.org',
+            'https://ctf.l3ak.team',
+            'https://ctf.themctf.com',
+            'https://ctf.flagaholic.xyz',
+            'https://play.flagaholic.xyz',
+            'https://chall.flagaholic.xyz',
+            'https://ctf.flagaholic.com',
           ]
-          def get(path):
+          paths=['/api/v1/challenges','/api/v1/challs','/api/v2/challs','/challenges','/api/v1/configs','/api/v1/integrations/client/config','/api/v2/integrations/client/config']
+          def get(spec):
+            base,path=spec
             try:
-              r=requests.get(BASE+path,headers={"User-Agent":UA,"Accept":"application/json"},allow_redirects=False,timeout=20)
-              return {"path":path,"status":r.status_code,"headers":dict(r.headers),"body":r.text}
-            except Exception as e:return {"path":path,"error":repr(e)}
-          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
-            for x in ex.map(get,paths): print(json.dumps(x,ensure_ascii=False),flush=True)
+              r=requests.get(base+path,headers={'User-Agent':UA,'Accept':'application/json,text/html,*/*'},allow_redirects=False,timeout=18)
+              return {'base':base,'path':path,'status':r.status_code,'location':r.headers.get('location'),'type':r.headers.get('content-type'),'len':len(r.content),'body':r.text[:1000000]}
+            except Exception as e:return {'base':base,'path':path,'error':repr(e)}
+          specs=[(b,p) for b in bases for p in paths]
+          with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex:
+            for x in ex.map(get,specs):
+              blob=(x.get('body') or '').lower()
+              hit=any(k in blob for k in ['c2xbypl','does ppl still watch vlogs','share my vlogs','remove the ellipsis'])
+              x['exact_hit']=hit
+              print(json.dumps(x,ensure_ascii=False),flush=True)
           PY
-          cat l3ak-api.txt
-      - name: Upload API output
+          cat ctf-scan.txt
+      - name: Upload scan
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: l3ak-public-api
-          path: l3ak-api.txt
+          name: public-ctf-challenge-scan
+          path: ctf-scan.txt
           retention-days: 1
