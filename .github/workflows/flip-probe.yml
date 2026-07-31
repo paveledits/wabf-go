@@ -1,4 +1,4 @@
-name: bushbash-public-route-probe
+name: bushbash-detail-probe
 
 on:
   pull_request:
@@ -13,47 +13,45 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 4
     steps:
-      - name: Fetch BushBash public route data
+      - name: Reverse challenge detail API
         shell: bash
         run: |
-          python3 - <<'PY' > bushbash.txt 2>&1
-          import concurrent.futures, json, re, urllib.parse, requests
+          python3 - <<'PY' > bush-detail.txt 2>&1
+          import concurrent.futures, json, re, requests
           BASE='https://bushbash.cssa.club'
           UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36'
-          paths=[
-            '/challenges/__data.json','/challenges/__data.json?x-sveltekit-invalidated=11',
-            '/__data.json','/api/challenges','/api/challenge','/api/getChallenges','/api/v1/challenge',
-            '/_app/immutable/entry/app.JejHXHYk.js','/_app/immutable/entry/start.BSPZr-m5.js',
-            '/_app/immutable/chunks/entry.DtQAtgh9.js','/_app/immutable/chunks/index-client.WXfFUu-k.js'
+          assets=[
+            '/_app/immutable/chunks/challenges.C24INKI6.js',
+            '/_app/immutable/nodes/30.B2rEhVGm.js',
+            '/_app/immutable/chunks/page.BtwN4EXQ.js',
+            '/_app/immutable/chunks/default.CoguAwf4.js'
           ]
-          def get(path):
+          def get(url):
             try:
-              r=requests.get(BASE+path,headers={'User-Agent':UA,'Accept':'*/*'},timeout=20)
-              return {'path':path,'status':r.status_code,'type':r.headers.get('content-type'),'len':len(r.content),'body':r.text[:2000000]}
-            except Exception as e:return {'path':path,'error':repr(e)}
-          with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
-            results=list(ex.map(get,paths))
-          for x in results: print('RESULT',json.dumps(x,ensure_ascii=False),flush=True)
-          assets=set()
-          for x in results:
-            body=x.get('body','')
-            for m in re.findall(r'["\'`](/_app/immutable/[^"\'`]+\.js)["\'`]',body): assets.add(BASE+m)
-          print('ASSETS',json.dumps(sorted(assets)),flush=True)
-          def getu(url):
-            try:
-              r=requests.get(url,headers={'User-Agent':UA},timeout=20)
+              r=requests.get(url,headers={'User-Agent':UA,'Accept':'*/*'},timeout=20)
               return {'url':url,'status':r.status_code,'type':r.headers.get('content-type'),'len':len(r.content),'body':r.text[:2000000]}
             except Exception as e:return {'url':url,'error':repr(e)}
+          for x in map(get,[BASE+a for a in assets]):
+            print('ASSET',json.dumps(x,ensure_ascii=False),flush=True)
+          ids=[7,9,10,12,26]
+          slugs=['the-cssa-hackerman-i','the-cssa-hackerman-ii','the-cssa-hackerman-iii','the-eye','membership-perks']
+          urls=[]
+          for i in ids:
+            urls += [f'{BASE}/api/challenges/{i}',f'{BASE}/api/challenge/{i}',f'{BASE}/api/challenges?id={i}',f'{BASE}/api/challenge?id={i}']
+          for slug in slugs:
+            urls += [f'{BASE}/api/challenges/{slug}',f'{BASE}/api/challenge/{slug}',f'{BASE}/api/challenges?slug={slug}',f'{BASE}/api/challenge?slug={slug}',f'{BASE}/challenges/{slug}/__data.json']
           with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
-            for x in ex.map(getu,sorted(assets)):
-              blob=x.get('body','').lower(); x['hit']=any(k in blob for k in ['c2xbypl','does ppl still watch vlogs','share my vlogs','remove the ellipsis'])
-              print('ASSET',json.dumps(x,ensure_ascii=False),flush=True)
+            for x in ex.map(get,urls):
+              body=(x.get('body') or '').lower()
+              x['hit']=any(k in body for k in ['c2xbypl','does ppl still watch vlogs','share my vlogs','ellipsis'])
+              if x.get('status') != 404 or x['hit']:
+                print('PROBE',json.dumps(x,ensure_ascii=False),flush=True)
           PY
-          cat bushbash.txt
+          cat bush-detail.txt
       - name: Upload output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bushbash-public-route-data
-          path: bushbash.txt
+          name: bushbash-detail-probe
+          path: bush-detail.txt
           retention-days: 1
