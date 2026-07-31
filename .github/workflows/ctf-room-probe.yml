@@ -11,109 +11,122 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
-      - name: Reverse join endpoint and test class code
+      - name: Reconstruct class lookup and probe historical hosts
         shell: bash
         run: |
           pip install -q jsbeautifier requests
           python3 - <<'PY'
-          import json, re, requests, jsbeautifier, urllib.parse
+          import base64, json, re, urllib.parse
+          import jsbeautifier, requests
 
           CODE = "c2xbypl"
-          TS = "20220808132001"
-          ORIGINAL = "https://applieddigitalskills.withgoogle.com/static/js/gcip_login.js"
-          ARCHIVED = f"https://web.archive.org/web/{TS}id_/{ORIGINAL}"
           UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
-
+          ARCHIVED_JS = "https://web.archive.org/web/20220808132001id_/https://applieddigitalskills.withgoogle.com/static/js/gcip_login.js"
           s = requests.Session()
           s.headers.update({"User-Agent": UA, "Accept": "*/*"})
-          r = s.get(ARCHIVED, timeout=60)
-          print("SCRIPT", r.status_code, r.url, r.headers.get("content-type"), len(r.content), flush=True)
-          source = r.text
-          pretty = jsbeautifier.beautify(source)
 
-          needles = [
-              "/v1/course/validate-join",
-              "Enter your class code",
-              "Class Code Entry",
-              "course_student_code",
-              "/create-student-account",
-          ]
-          for needle in needles:
-              print("=== NEEDLE", needle, "===", flush=True)
-              start = 0
-              count = 0
-              while True:
-                  idx = pretty.find(needle, start)
-                  if idx < 0 or count >= 12:
-                      break
-                  print("INDEX", idx, flush=True)
-                  print(pretty[max(0, idx-5000):idx+7000], flush=True)
-                  start = idx + len(needle)
-                  count += 1
+          r = s.get(ARCHIVED_JS, timeout=60)
+          print("JS", r.status_code, len(r.content), r.url, flush=True)
+          src = r.text
+          pretty = jsbeautifier.beautify(src)
 
-          endpoint = "/v1/course/validate-join"
-          idx = pretty.find(endpoint)
-          if idx >= 0:
-              chunk = pretty[max(0, idx-15000):idx+15000]
-              print("=== LARGE VALIDATE CHUNK ===", flush=True)
-              print(chunk, flush=True)
+          def print_function(name):
+              patterns = [rf"function\s+{re.escape(name)}\s*\(", rf"\b{name}\s*=\s*function\s*\("]
+              for pat in patterns:
+                  m = re.search(pat, pretty)
+                  if m:
+                      i = m.start()
+                      print(f"=== FUNCTION {name} @ {i} ===", flush=True)
+                      print(pretty[max(0, i-1000):i+10000], flush=True)
+                      return
+              print("FUNCTION_NOT_FOUND", name, flush=True)
 
-          base = "https://applieddigitalskills.withgoogle.com"
-          candidates = []
-          payloads = [
-              {"course_code": CODE},
-              {"courseCode": CODE},
-              {"code": CODE},
-              {"student_code": CODE},
-              {"course_student_code": CODE},
-          ]
-          for payload in payloads:
-              candidates.append(("GET", base + endpoint, payload, None))
-              candidates.append(("POST_JSON", base + endpoint, None, payload))
-              candidates.append(("POST_FORM", base + endpoint, None, payload))
-          candidates += [
-              ("GET", base + "/login-student", {"course_code": CODE}, None),
-              ("GET", base + "/login-student", {"code": CODE}, None),
-              ("GET", base + "/login/" + CODE, None, None),
-              ("GET", base + "/course/" + CODE, None, None),
-          ]
+          for fn in ["Fd", "th", "lh", "Oq", "vh", "gs", "Pr"]:
+              print_function(fn)
 
-          print("=== LIVE ENDPOINT TESTS ===", flush=True)
-          for kind, url, params, payload in candidates:
-              try:
-                  if kind == "GET":
-                      resp = s.get(url, params=params, allow_redirects=False, timeout=25)
-                  elif kind == "POST_JSON":
-                      resp = s.post(url, json=payload, allow_redirects=False, timeout=25)
-                  else:
-                      resp = s.post(url, data=payload, allow_redirects=False, timeout=25)
-                  print(json.dumps({
-                      "kind": kind,
-                      "url": resp.request.url,
-                      "payload": payload,
-                      "status": resp.status_code,
-                      "location": resp.headers.get("location"),
-                      "content_type": resp.headers.get("content-type"),
-                      "length": len(resp.content),
-                      "body": resp.text[:3000],
-                  }, ensure_ascii=False), flush=True)
-              except Exception as e:
-                  print("ERROR", kind, url, payload, repr(e), flush=True)
+          print("=== RELEVANT HOST STRINGS ===", flush=True)
+          strings = sorted(set(re.findall(r'["\']([^"\']{4,400})["\']', src)))
+          for x in strings:
+              lx = x.lower()
+              if any(k in lx for k in ["appspot", "firebase", "googleapis", "googleusercontent", "withgoogle", "apski", "elms", "course/validate", "scratch-login"]):
+                  print(x, flush=True)
 
-          print("=== WAYBACK ENDPOINT INDEX ===", flush=True)
-          cdx_params = {
-              "url": "applieddigitalskills.withgoogle.com/v1/course/validate-join*",
-              "output": "json",
-              "fl": "timestamp,original,statuscode,mimetype,length,digest",
-              "filter": "statuscode:200",
-              "collapse": "digest",
-              "limit": "1000",
+          raw = bytes([0x12, 0x07]) + CODE.encode() + bytes([0x20, 0x01])
+          variants = {
+              "raw_hex": raw.hex(),
+              "b64": base64.b64encode(raw).decode(),
+              "b64url": base64.urlsafe_b64encode(raw).decode(),
+              "b64_nopad": base64.b64encode(raw).decode().rstrip("="),
+              "b64url_nopad": base64.urlsafe_b64encode(raw).decode().rstrip("="),
           }
-          try:
-              resp = s.get("https://web.archive.org/cdx/search/cdx", params=cdx_params, timeout=90)
-              print(resp.status_code, resp.url, resp.text[:100000], flush=True)
-          except Exception as e:
-              print("CDX ERROR", repr(e), flush=True)
+          print("=== ENCODINGS ===", json.dumps(variants), flush=True)
+
+          encoded_values = list(dict.fromkeys([variants["b64"], variants["b64url"], variants["b64_nopad"], variants["b64url_nopad"]]))
+          hosts = [
+              "https://applieddigitalskills.withgoogle.com",
+              "https://csfirst.withgoogle.com",
+              "https://apski-production.appspot.com",
+              "https://apski-production.firebaseapp.com",
+              "https://apski-production.web.app",
+              "https://apski.appspot.com",
+              "https://applieddigitalskills.appspot.com",
+              "https://applied-digital-skills.appspot.com",
+              "https://engedu-elms-lms.appspot.com",
+              "https://elms-lms.appspot.com",
+              "https://engedu.appspot.com",
+          ]
+
+          print("=== HOST ROOTS ===", flush=True)
+          for host in hosts:
+              try:
+                  q = s.get(host + "/", allow_redirects=False, timeout=20)
+                  print(json.dumps({"host": host, "status": q.status_code, "location": q.headers.get("location"), "server": q.headers.get("server"), "type": q.headers.get("content-type"), "len": len(q.content), "body": q.text[:500]}, ensure_ascii=False), flush=True)
+              except Exception as e:
+                  print("ROOT_ERROR", host, repr(e), flush=True)
+
+          print("=== VALIDATE PROBES ===", flush=True)
+          for host in hosts:
+              for val in encoded_values:
+                  for param in ["request", "$req", "req"]:
+                      url = host + "/v1/course/validate-join?" + urllib.parse.urlencode({param: val})
+                      try:
+                          q = s.get(url, allow_redirects=False, timeout=20)
+                          if q.status_code != 404 or host.endswith("withgoogle.com"):
+                              print(json.dumps({"url": url, "status": q.status_code, "location": q.headers.get("location"), "server": q.headers.get("server"), "type": q.headers.get("content-type"), "len": len(q.content), "body_hex": q.content[:120].hex(), "body": q.text[:1000]}, ensure_ascii=False), flush=True)
+                      except Exception as e:
+                          print("PROBE_ERROR", url, repr(e), flush=True)
+
+          print("=== EXACT LOGIN ARCHIVES ===", flush=True)
+          archive_targets = [
+              f"https://applieddigitalskills.withgoogle.com/login/{CODE}",
+              f"https://csfirst.withgoogle.com/login/{CODE}",
+              f"https://applieddigitalskills.withgoogle.com/login-student?course_code={CODE}",
+              f"https://csfirst.withgoogle.com/login-student?course_code={CODE}",
+          ]
+          for target in archive_targets:
+              for api in [
+                  "https://archive.org/wayback/available?" + urllib.parse.urlencode({"url": target}),
+                  "https://web.archive.org/cdx/search/cdx?" + urllib.parse.urlencode({"url": target, "output": "json", "fl": "timestamp,original,statuscode,mimetype,length,digest", "filter": "statuscode:200", "limit": "100"}),
+              ]:
+                  try:
+                      q = s.get(api, timeout=60)
+                      print("ARCHIVE", target, q.status_code, q.url, q.text[:20000], flush=True)
+                  except Exception as e:
+                      print("ARCHIVE_ERROR", target, repr(e), flush=True)
+
+          print("=== PROJECT DISCOVERY ===", flush=True)
+          discovery_urls = [
+              'https://www.google.com/search?q=' + urllib.parse.quote('"apski-production"'),
+              'https://www.bing.com/search?q=' + urllib.parse.quote('"apski-production"'),
+              'https://crt.sh/?q=' + urllib.parse.quote('%25.apski-production.appspot.com') + '&output=json',
+              'https://dns.google/resolve?name=apski-production.appspot.com&type=A',
+          ]
+          for url in discovery_urls:
+              try:
+                  q = s.get(url, timeout=45)
+                  print("DISCOVERY", q.status_code, q.url, q.text[:30000], flush=True)
+              except Exception as e:
+                  print("DISCOVERY_ERROR", url, repr(e), flush=True)
           PY
