@@ -1,0 +1,127 @@
+name: flip-room-probe
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Extract retired Flip Android client
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p flip_out/apk
+          python3 - <<'PY' > flip_out/result.txt 2>&1
+          import concurrent.futures, json, os, re, subprocess, urllib.parse
+          from pathlib import Path
+          import requests
+
+          CODE="c2xbypl"
+          UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
+          S=requests.Session(); S.headers.update({"User-Agent":UA,"Accept":"*/*"})
+
+          apk_urls=[
+            "https://downloads.sourceforge.net/project/flipgrid/flipgrid_13.7.5.apk",
+            "https://sourceforge.net/projects/flipgrid/files/flipgrid_13.7.5.apk/download",
+          ]
+          apk_path=Path("flip_out/flipgrid.apk")
+          for url in apk_urls:
+            try:
+              print("APK_TRY",url,flush=True)
+              with S.get(url,stream=True,allow_redirects=True,timeout=120) as r:
+                print("APK_RESPONSE",r.status_code,r.url,r.headers.get("content-type"),r.headers.get("content-length"),flush=True)
+                if r.status_code==200 and ("html" not in (r.headers.get("content-type") or "").lower()):
+                  with apk_path.open("wb") as f:
+                    for chunk in r.iter_content(1024*1024):
+                      if chunk:f.write(chunk)
+                  print("APK_SAVED",apk_path.stat().st_size,flush=True)
+                  break
+            except Exception as e: print("APK_ERROR",url,repr(e),flush=True)
+
+          if apk_path.exists():
+            subprocess.run(["unzip","-q",str(apk_path),"-d","flip_out/apk"],check=False)
+            print("APK_FILES",sum(1 for _ in Path("flip_out/apk").rglob("*")),flush=True)
+            print("APK_SIZE",apk_path.stat().st_size,flush=True)
+          else:
+            print("NO_APK",flush=True)
+
+          candidates=[]
+          for p in Path("flip_out/apk").rglob("*"):
+            if p.is_file() and p.stat().st_size <= 300_000_000:
+              if p.suffix.lower() in [".dex",".so",".json",".xml",".js",".bundle",".txt",".html",".properties"] or "asset" in str(p).lower():
+                candidates.append(p)
+          print("CANDIDATE_FILES",len(candidates),flush=True)
+
+          url_re=re.compile(rb"https?://[^\x00\s\"'<>]{4,500}")
+          domain_re=re.compile(rb"(?:[A-Za-z0-9-]+\.)+(?:com|net|io|azureedge\.net|azurewebsites\.net|cloudapp\.azure\.com)")
+          path_re=re.compile(rb"/[A-Za-z0-9_.~!$&'()*+,;=:@%?{}\[\]-]{2,200}")
+          keywords=[b"flipgrid",b"flip.com",b"joincode",b"join_code",b"groupcode",b"group_code",b"shortcode",b"topic",b"response",b"space",b"room",b"api",b"azure",b"vidku"]
+          urls=set(); domains=set(); contexts=[]; paths=set()
+          for p in candidates:
+            try:data=p.read_bytes()
+            except:continue
+            low=data.lower()
+            if not any(k in low for k in keywords):continue
+            for m in url_re.findall(data): urls.add(m.decode("utf-8","replace"))
+            for m in domain_re.findall(data): domains.add(m.decode("utf-8","replace"))
+            for needle in keywords:
+              start=0
+              while len(contexts)<5000:
+                i=low.find(needle,start)
+                if i<0:break
+                contexts.append({"file":str(p),"needle":needle.decode(),"context":data[max(0,i-300):i+700].decode("utf-8","replace")})
+                start=i+len(needle)
+            for m in path_re.findall(data):
+              lm=m.lower()
+              if any(k in lm for k in [b"api",b"join",b"group",b"topic",b"response",b"space",b"room"]):
+                paths.add(m.decode("utf-8","replace"))
+          Path("flip_out/urls.txt").write_text("\n".join(sorted(urls)))
+          Path("flip_out/domains.txt").write_text("\n".join(sorted(domains)))
+          Path("flip_out/paths.txt").write_text("\n".join(sorted(paths)))
+          Path("flip_out/contexts.json").write_text(json.dumps(contexts,ensure_ascii=False,indent=2))
+          print("URLS",json.dumps(sorted(urls),ensure_ascii=False),flush=True)
+          print("DOMAINS",json.dumps(sorted(domains),ensure_ascii=False),flush=True)
+          print("PATHS",json.dumps(sorted(paths)[:5000],ensure_ascii=False),flush=True)
+          print("CONTEXT_COUNT",len(contexts),flush=True)
+
+          live_urls=[
+            f"https://flipgrid.com/{CODE}",f"https://www.flipgrid.com/{CODE}",
+            f"https://flip.com/{CODE}",f"https://www.flip.com/{CODE}",
+            f"https://flip.com/s/{CODE}",f"https://flip.com/groups/{CODE}",
+            f"https://flip.com/join/{CODE}",f"https://flipgrid.com/join/{CODE}",
+          ]
+          def fetch(url):
+            try:
+              r=requests.get(url,headers={"User-Agent":UA},allow_redirects=False,timeout=25)
+              return {"url":url,"status":r.status_code,"location":r.headers.get("location"),"type":r.headers.get("content-type"),"len":len(r.content),"body":r.text[:5000]}
+            except Exception as e:return {"url":url,"error":repr(e)}
+          print("LIVE_URLS",flush=True)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+            for x in ex.map(fetch,live_urls):print(json.dumps(x,ensure_ascii=False),flush=True)
+
+          cdx_targets=[f"flipgrid.com/*{CODE}*",f"www.flipgrid.com/*{CODE}*",f"flip.com/*{CODE}*",f"www.flip.com/*{CODE}*"]
+          print("CDX",flush=True)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            specs=[]
+            for t in cdx_targets:
+              url="https://web.archive.org/cdx/search/cdx?"+urllib.parse.urlencode({"url":t,"output":"json","fl":"timestamp,original,statuscode,mimetype,length,digest","filter":"statuscode:200","collapse":"urlkey","limit":"10000"})
+              specs.append(url)
+            for t,x in zip(cdx_targets,ex.map(fetch,specs)):print(t,json.dumps(x,ensure_ascii=False),flush=True)
+          PY
+          rm -f flip_out/flipgrid.apk
+          tar -czf flip-probe-output.tar.gz flip_out
+      - name: Upload Flip probe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flip-room-probe-output
+          path: flip-probe-output.tar.gz
+          if-no-files-found: warn
+          retention-days: 1
