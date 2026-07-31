@@ -13,18 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - name: Recover archived Applied Digital Skills client
+      - name: Enumerate archived dashboard bundles
         shell: bash
         run: |
           python3 - <<'PY'
-          import concurrent.futures, json, re, urllib.error, urllib.parse, urllib.request
+          import concurrent.futures, gzip, json, re, urllib.error, urllib.parse, urllib.request, zlib
 
           UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
           ORIGIN = "https://applieddigitalskills.withgoogle.com"
-          paths = ["/", "/login", "/dashboard", "/student", "/teacher", "/s/en/learn"]
 
-          def fetch(url, timeout=35, limit=3000000):
-              req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
+          def fetch(url, timeout=45, limit=12000000):
+              req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*", "Accept-Encoding": "identity"})
               try:
                   with urllib.request.urlopen(req, timeout=timeout) as r:
                       return r.status, r.geturl(), dict(r.headers), r.read(limit)
@@ -33,86 +32,94 @@ jobs:
               except Exception as e:
                   return None, url, {}, repr(e).encode()
 
-          print("=== SNAPSHOT LOOKUP ===", flush=True)
-          snapshots = []
-          for path in paths:
-              original = ORIGIN + path
-              api = "https://archive.org/wayback/available?" + urllib.parse.urlencode({"url": original, "timestamp": "20240601"})
-              status, final, headers, body = fetch(api)
-              print(path, status, body.decode("utf-8", "replace")[:4000], flush=True)
-              try:
-                  data = json.loads(body)
-                  snap = data.get("archived_snapshots", {}).get("closest", {})
-                  if snap.get("available"):
-                      snapshots.append((path, snap["timestamp"], snap["url"]))
-              except Exception:
-                  pass
-
-          print("=== ARCHIVED HTML AND SCRIPTS ===", flush=True)
-          scripts = []
-          for path, ts, snap_url in snapshots:
-              original = ORIGIN + path
-              replay = f"https://web.archive.org/web/{ts}id_/{original}"
-              status, final, headers, body = fetch(replay)
-              text = body.decode("utf-8", "replace")
-              print("PAGE", path, ts, status, final, headers.get("Content-Type"), len(body), flush=True)
-              print(text[:20000], flush=True)
-              for src in re.findall(r'<script[^>]+src=["\']([^"\']+)', text, re.I):
-                  if src.startswith("//"):
-                      src = "https:" + src
-                  elif src.startswith("/"):
-                      src = ORIGIN + src
-                  elif not src.startswith("http"):
-                      src = urllib.parse.urljoin(original, src)
-                  scripts.append((ts, src))
-
-          seen = set()
-          scripts = [(ts, src) for ts, src in scripts if not (src in seen or seen.add(src))]
-          print("SCRIPTS", json.dumps(scripts, indent=2), flush=True)
-
-          keywords = re.compile(r'.{0,180}(?:class.?code|join.?class|enrollment|course|student.?progress|/api/|fetch\(|axios|graphql|dashboard|classroom).{0,300}', re.I)
-
-          def get_script(item):
-              ts, src = item
-              replay = f"https://web.archive.org/web/{ts}id_/{src}"
-              return item, fetch(replay, 50, 8000000)
-
-          print("=== SCRIPT ENDPOINT STRINGS ===", flush=True)
-          with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-              for (ts, src), result in ex.map(get_script, scripts[:80]):
-                  status, final, headers, body = result
-                  text = body.decode("utf-8", "replace")
-                  matches = keywords.findall(text)
-                  urls = sorted(set(re.findall(r'https?://[^"\'\s)]+|/[A-Za-z0-9_./?=&%-]*(?:api|class|course|student|join|dashboard)[A-Za-z0-9_./?=&%-]*', text, re.I)))
-                  if matches or urls:
-                      print("SCRIPT", ts, src, status, headers.get("Content-Type"), len(body), flush=True)
-                      print("MATCHES", json.dumps(matches[:80], ensure_ascii=False), flush=True)
-                      print("URLS", json.dumps(urls[:300], ensure_ascii=False), flush=True)
-
-          print("=== DOMAIN JS CDX ===", flush=True)
-          cdx_urls = [
-              "https://web.archive.org/cdx/search/cdx?" + urllib.parse.urlencode({
-                  "url": "applieddigitalskills.withgoogle.com/*.js",
-                  "from": "2023",
-                  "to": "2025",
-                  "output": "json",
-                  "fl": "timestamp,original,statuscode,mimetype,length",
-                  "filter": ["statuscode:200", "mimetype:application/javascript|text/javascript"],
-                  "collapse": "urlkey",
-                  "limit": "2000",
-              }),
-              "https://web.archive.org/cdx/search/cdx?" + urllib.parse.urlencode({
-                  "url": "applieddigitalskills.withgoogle.com/static/*",
-                  "from": "2023",
-                  "to": "2025",
-                  "output": "json",
-                  "fl": "timestamp,original,statuscode,mimetype,length",
-                  "filter": "statuscode:200",
-                  "collapse": "urlkey",
-                  "limit": "2000",
-              }),
+          params = [
+              ("url", "applieddigitalskills.withgoogle.com/static/js/"),
+              ("matchType", "prefix"),
+              ("from", "2022"),
+              ("to", "2025"),
+              ("output", "json"),
+              ("fl", "timestamp,original,statuscode,mimetype,length,digest"),
+              ("filter", "statuscode:200"),
+              ("collapse", "urlkey"),
+              ("limit", "10000"),
           ]
-          for url in cdx_urls:
-              status, final, headers, body = fetch(url, 90, 10000000)
-              print("CDX", status, body.decode("utf-8", "replace")[:200000], flush=True)
+          cdx = "https://web.archive.org/cdx/search/cdx?" + urllib.parse.urlencode(params)
+          status, final, headers, body = fetch(cdx, 120, 20000000)
+          print("CDX_STATUS", status, final, headers.get("Content-Type"), len(body), flush=True)
+          text = body.decode("utf-8", "replace")
+          print("CDX_HEAD", text[:30000], flush=True)
+
+          rows = []
+          try:
+              data = json.loads(text)
+              if data and isinstance(data[0], list):
+                  keys = data[0]
+                  rows = [dict(zip(keys, r)) for r in data[1:]]
+          except Exception as e:
+              print("CDX_PARSE_ERROR", repr(e), flush=True)
+
+          if not rows:
+              guessed = [
+                  "dashboard.js", "student_dashboard.js", "teacher_dashboard.js", "course.js",
+                  "courses.js", "class.js", "classes.js", "profile.js", "common.js",
+                  "dashboard_course.js", "dashboard_class.js", "student.js", "teacher.js",
+              ]
+              for name in guessed:
+                  url = f"{ORIGIN}/static/js/{name}?cacheTs=1729289814"
+                  api = "https://archive.org/wayback/available?" + urllib.parse.urlencode({"url": url, "timestamp": "20241026"})
+                  s, f, h, b = fetch(api)
+                  print("GUESS", name, s, b.decode("utf-8", "replace")[:2000], flush=True)
+                  try:
+                      snap = json.loads(b).get("archived_snapshots", {}).get("closest", {})
+                      if snap.get("available"):
+                          rows.append({"timestamp": snap["timestamp"], "original": url, "length": "0", "digest": name})
+                  except Exception:
+                      pass
+
+          unique = {}
+          for row in rows:
+              original = row.get("original", "")
+              base = original.split("?", 1)[0]
+              if not base.endswith(".js"):
+                  continue
+              key = base.rsplit("/", 1)[-1]
+              old = unique.get(key)
+              if old is None or row.get("timestamp", "") > old.get("timestamp", ""):
+                  unique[key] = row
+
+          print("BUNDLES", json.dumps(sorted((k, v.get("timestamp"), v.get("original"), v.get("length")) for k, v in unique.items()), ensure_ascii=False, indent=2), flush=True)
+
+          priority = []
+          for name, row in unique.items():
+              score = sum(word in name.lower() for word in ["dashboard", "class", "course", "student", "teacher", "profile", "common", "app"])
+              priority.append((-score, name, row))
+          priority.sort()
+
+          endpoint_re = re.compile(r'(?:(?:https?://[^"\'\s)]+)|(?:/[A-Za-z0-9_./?=&%${}:~-]{2,}))')
+          context_re = re.compile(r'.{0,300}(?:class.?code|join.?class|join.?course|student.?code|enroll|course.?code|invalid.?code|student.?progress|assigned.?unit|/api/|firebase|firestore|dashboard).{0,500}', re.I)
+
+          def download(item):
+              _, name, row = item
+              ts = row.get("timestamp")
+              original = row.get("original")
+              replay = f"https://web.archive.org/web/{ts}id_/{original}"
+              return name, row, fetch(replay, 70, 15000000)
+
+          print("=== BUNDLE ANALYSIS ===", flush=True)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+              for name, row, result in ex.map(download, priority[:120]):
+                  s, f, h, b = result
+                  js = b.decode("utf-8", "replace")
+                  contexts = context_re.findall(js)
+                  endpoints = sorted({x for x in endpoint_re.findall(js) if any(w in x.lower() for w in ["class", "course", "student", "join", "enroll", "dashboard", "api", "progress"])})
+                  if contexts or endpoints:
+                      print("BUNDLE", name, row.get("timestamp"), row.get("original"), s, h.get("Content-Type"), len(b), flush=True)
+                      print("CONTEXTS", json.dumps(contexts[:150], ensure_ascii=False), flush=True)
+                      print("ENDPOINTS", json.dumps(endpoints[:500], ensure_ascii=False), flush=True)
+
+          print("=== DIRECT LIVE STATIC TEST ===", flush=True)
+          for name in [x[1] for x in priority[:40]]:
+              url = f"{ORIGIN}/static/js/{name}"
+              s, f, h, b = fetch(url, 25, 100000)
+              print(name, s, f, h.get("Content-Type"), len(b), b[:100].decode("utf-8", "replace"), flush=True)
           PY
