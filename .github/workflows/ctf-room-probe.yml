@@ -17,7 +17,7 @@ jobs:
         shell: bash
         run: |
           pip install -q jsbeautifier requests
-          python3 - <<'PY'
+          python3 - <<'PY' > result.txt 2>&1
           import base64, json, re, urllib.parse
           import jsbeautifier, requests
 
@@ -130,3 +130,10 @@ jobs:
               except Exception as e:
                   print("DISCOVERY_ERROR", url, repr(e), flush=True)
           PY
+          cat result.txt
+      - name: Upload probe output
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctf-room-probe-output
+          path: result.txt
+          retention-days: 1
