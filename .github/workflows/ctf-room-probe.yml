@@ -11,99 +11,108 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      - name: Probe room code and archives
+      - name: Recover archived Applied Digital Skills client
         shell: bash
         run: |
           python3 - <<'PY'
-          import concurrent.futures, html, json, re, urllib.error, urllib.parse, urllib.request
+          import concurrent.futures, json, re, urllib.error, urllib.parse, urllib.request
 
-          CODE = "c2xbypl"
           UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
+          ORIGIN = "https://applieddigitalskills.withgoogle.com"
+          paths = ["/", "/login", "/dashboard", "/student", "/teacher", "/s/en/learn"]
 
-          candidates = [
-              f"https://classroom.google.com/c/?cjc={CODE}",
-              f"https://classroom.google.com/u/0/h?cjc={CODE}",
-              f"https://applieddigitalskills.withgoogle.com/?code={CODE}",
-              f"https://applieddigitalskills.withgoogle.com/apps/route?code={CODE}",
-              f"https://applieddigitalskills.withgoogle.com/apps/join?code={CODE}",
-              f"https://edu.exceedlms.com/student/catalog?search={CODE}",
-              f"https://padlet.com/join/{CODE}",
-              f"https://wakelet.com/wake/{CODE}",
-              f"https://w2g.tv/rooms/{CODE}",
-              f"https://watch2gether.com/rooms/{CODE}",
-              f"https://sync-tube.de/room/{CODE}",
-              f"https://cytu.be/r/{CODE}",
-              f"https://kosmi.io/room/{CODE}",
-              f"https://watchparty.me/watch/{CODE}",
-              f"https://whereby.com/{CODE}",
-              f"https://discord.com/api/v10/invites/{CODE}?with_counts=true&with_expiration=true",
-          ]
-
-          def fetch(url, timeout=15):
+          def fetch(url, timeout=35, limit=3000000):
               req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
               try:
                   with urllib.request.urlopen(req, timeout=timeout) as r:
-                      return r.status, r.geturl(), dict(r.headers), r.read(150000)
+                      return r.status, r.geturl(), dict(r.headers), r.read(limit)
               except urllib.error.HTTPError as e:
-                  return e.code, e.geturl(), dict(e.headers), e.read(150000)
+                  return e.code, e.geturl(), dict(e.headers), e.read(limit)
               except Exception as e:
                   return None, url, {}, repr(e).encode()
 
-          def summary(body):
-              s = body.decode("utf-8", "replace")
-              title = re.search(r"<title[^>]*>(.*?)</title>", s, re.I | re.S)
-              og = re.search(r'<meta[^>]+(?:property|name)=["\']og:title["\'][^>]+content=["\']([^"\']+)', s, re.I)
-              text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", s, flags=re.I | re.S)
-              text = html.unescape(re.sub(r"<[^>]+>", " ", text))
-              return {
-                  "title": html.unescape(title.group(1)).strip() if title else None,
-                  "og_title": html.unescape(og.group(1)).strip() if og else None,
-                  "text": re.sub(r"\s+", " ", text).strip()[:900],
-              }
+          print("=== SNAPSHOT LOOKUP ===", flush=True)
+          snapshots = []
+          for path in paths:
+              original = ORIGIN + path
+              api = "https://archive.org/wayback/available?" + urllib.parse.urlencode({"url": original, "timestamp": "20240601"})
+              status, final, headers, body = fetch(api)
+              print(path, status, body.decode("utf-8", "replace")[:4000], flush=True)
+              try:
+                  data = json.loads(body)
+                  snap = data.get("archived_snapshots", {}).get("closest", {})
+                  if snap.get("available"):
+                      snapshots.append((path, snap["timestamp"], snap["url"]))
+              except Exception:
+                  pass
 
-          def probe(url):
-              status, final, headers, body = fetch(url)
-              return {"requested": url, "status": status, "final": final, "type": headers.get("Content-Type"), "len": len(body), **summary(body)}
+          print("=== ARCHIVED HTML AND SCRIPTS ===", flush=True)
+          scripts = []
+          for path, ts, snap_url in snapshots:
+              original = ORIGIN + path
+              replay = f"https://web.archive.org/web/{ts}id_/{original}"
+              status, final, headers, body = fetch(replay)
+              text = body.decode("utf-8", "replace")
+              print("PAGE", path, ts, status, final, headers.get("Content-Type"), len(body), flush=True)
+              print(text[:20000], flush=True)
+              for src in re.findall(r'<script[^>]+src=["\']([^"\']+)', text, re.I):
+                  if src.startswith("//"):
+                      src = "https:" + src
+                  elif src.startswith("/"):
+                      src = ORIGIN + src
+                  elif not src.startswith("http"):
+                      src = urllib.parse.urljoin(original, src)
+                  scripts.append((ts, src))
 
-          print("=== LIVE ===", flush=True)
-          with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
-              for result in ex.map(probe, candidates):
-                  print(json.dumps(result, ensure_ascii=False), flush=True)
+          seen = set()
+          scripts = [(ts, src) for ts, src in scripts if not (src in seen or seen.add(src))]
+          print("SCRIPTS", json.dumps(scripts, indent=2), flush=True)
 
-          print("=== WAYBACK AVAILABILITY ===", flush=True)
-          availability = ["https://archive.org/wayback/available?" + urllib.parse.urlencode({"url": u}) for u in candidates]
-          with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
-              for original, result in zip(candidates, ex.map(fetch, availability)):
-                  status, final, headers, body = result
-                  print(original, status, body.decode("utf-8", "replace")[:1800], flush=True)
+          keywords = re.compile(r'.{0,180}(?:class.?code|join.?class|enrollment|course|student.?progress|/api/|fetch\(|axios|graphql|dashboard|classroom).{0,300}', re.I)
 
-          print("=== CDX ===", flush=True)
-          targets = [
-              f"classroom.google.com/*{CODE}*",
-              f"applieddigitalskills.withgoogle.com/*{CODE}*",
-              f"padlet.com/*{CODE}*",
-              f"wakelet.com/*{CODE}*",
-              f"w2g.tv/*{CODE}*",
-              f"watch2gether.com/*{CODE}*",
-          ]
-          cdx = ["https://web.archive.org/cdx/search/cdx?" + urllib.parse.urlencode({"url": t, "output": "json", "fl": "timestamp,original,statuscode,mimetype", "filter": "statuscode:200", "collapse": "urlkey", "limit": "50"}) for t in targets]
-          with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
-              for target, result in zip(targets, ex.map(fetch, cdx)):
-                  status, final, headers, body = result
-                  print(target, status, body.decode("utf-8", "replace")[:8000], flush=True)
+          def get_script(item):
+              ts, src = item
+              replay = f"https://web.archive.org/web/{ts}id_/{src}"
+              return item, fetch(replay, 50, 8000000)
 
-          print("=== SEARCH ===", flush=True)
-          queries = [f'"{CODE}"', f'"{CODE}" vlog', '"does ppl still watch vlogs"', '"i have a room to share my vlogs sometimes"']
-          search_urls = []
-          for q in queries:
-              search_urls.extend([
-                  "https://www.bing.com/search?q=" + urllib.parse.quote(q),
-                  "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(q),
-              ])
+          print("=== SCRIPT ENDPOINT STRINGS ===", flush=True)
           with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-              for url, result in zip(search_urls, ex.map(fetch, search_urls)):
+              for (ts, src), result in ex.map(get_script, scripts[:80]):
                   status, final, headers, body = result
-                  print(url, status, json.dumps(summary(body), ensure_ascii=False), flush=True)
+                  text = body.decode("utf-8", "replace")
+                  matches = keywords.findall(text)
+                  urls = sorted(set(re.findall(r'https?://[^"\'\s)]+|/[A-Za-z0-9_./?=&%-]*(?:api|class|course|student|join|dashboard)[A-Za-z0-9_./?=&%-]*', text, re.I)))
+                  if matches or urls:
+                      print("SCRIPT", ts, src, status, headers.get("Content-Type"), len(body), flush=True)
+                      print("MATCHES", json.dumps(matches[:80], ensure_ascii=False), flush=True)
+                      print("URLS", json.dumps(urls[:300], ensure_ascii=False), flush=True)
+
+          print("=== DOMAIN JS CDX ===", flush=True)
+          cdx_urls = [
+              "https://web.archive.org/cdx/search/cdx?" + urllib.parse.urlencode({
+                  "url": "applieddigitalskills.withgoogle.com/*.js",
+                  "from": "2023",
+                  "to": "2025",
+                  "output": "json",
+                  "fl": "timestamp,original,statuscode,mimetype,length",
+                  "filter": ["statuscode:200", "mimetype:application/javascript|text/javascript"],
+                  "collapse": "urlkey",
+                  "limit": "2000",
+              }),
+              "https://web.archive.org/cdx/search/cdx?" + urllib.parse.urlencode({
+                  "url": "applieddigitalskills.withgoogle.com/static/*",
+                  "from": "2023",
+                  "to": "2025",
+                  "output": "json",
+                  "fl": "timestamp,original,statuscode,mimetype,length",
+                  "filter": "statuscode:200",
+                  "collapse": "urlkey",
+                  "limit": "2000",
+              }),
+          ]
+          for url in cdx_urls:
+              status, final, headers, body = fetch(url, 90, 10000000)
+              print("CDX", status, body.decode("utf-8", "replace")[:200000], flush=True)
           PY
