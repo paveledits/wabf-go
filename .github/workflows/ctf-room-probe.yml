@@ -11,137 +11,129 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 10
     steps:
-      - name: Probe correct Google class-code request
+      - name: Recover archived Google education bundles
         shell: bash
         run: |
           pip install -q requests
           python3 - <<'PY' > result.txt 2>&1
-          import concurrent.futures, json, urllib.parse
+          import concurrent.futures, hashlib, json, os, re, urllib.parse
+          from pathlib import Path
           import requests
 
-          CODE = "c2xbypl"
-          REQUEST = json.dumps([None, CODE, None, 1], separators=(",", ":"))
           UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
-          ARCHIVED_JS = "https://web.archive.org/web/20220808132001id_/https://applieddigitalskills.withgoogle.com/static/js/gcip_login.js"
+          S = requests.Session()
+          S.headers.update({"User-Agent": UA, "Accept": "*/*"})
+          outdir = Path("bundles")
+          outdir.mkdir(exist_ok=True)
 
-          def fetch(spec):
-              method, url, kwargs = spec
+          def get(url, timeout=60, max_bytes=12_000_000):
               try:
-                  with requests.Session() as s:
-                      s.headers.update({"User-Agent": UA, "Accept": "*/*"})
-                      r = s.request(method, url, **kwargs)
-                  return {
-                      "requested": url,
-                      "final": r.url,
-                      "status": r.status_code,
-                      "location": r.headers.get("location"),
-                      "server": r.headers.get("server"),
-                      "content_type": r.headers.get("content-type"),
-                      "len": len(r.content),
-                      "body_hex": r.content[:120].hex(),
-                      "body": r.text[:12000],
-                  }
+                  r = S.get(url, timeout=timeout)
+                  return r.status_code, r.url, dict(r.headers), r.content[:max_bytes]
               except Exception as e:
-                  return {"requested": url, "error": repr(e)}
+                  return None, url, {}, repr(e).encode()
 
-          js = fetch(("GET", ARCHIVED_JS, {"timeout": 45}))
-          print("ARCHIVED_JS_META", json.dumps({k:v for k,v in js.items() if k != "body"}, ensure_ascii=False), flush=True)
-          try:
-              raw = requests.get(ARCHIVED_JS, headers={"User-Agent": UA}, timeout=45).content
-              open("gcip_login.js", "wb").write(raw)
-          except Exception as e:
-              print("JS_SAVE_ERROR", repr(e), flush=True)
-          print("REQUEST_JSON", REQUEST, flush=True)
-          print("REQUEST_ENCODED", urllib.parse.quote(REQUEST, safe=""), flush=True)
+          domains = ["applieddigitalskills.withgoogle.com", "csfirst.withgoogle.com"]
+          all_rows = []
+          for domain in domains:
+              params = [
+                  ("url", f"{domain}/static/js/*"),
+                  ("output", "json"),
+                  ("fl", "timestamp,original,statuscode,mimetype,length,digest"),
+                  ("filter", "statuscode:200"),
+                  ("collapse", "urlkey"),
+                  ("limit", "10000"),
+              ]
+              url = "https://web.archive.org/cdx/search/cdx?" + urllib.parse.urlencode(params)
+              st, final, hdr, body = get(url, 120, 30_000_000)
+              print("CDX", domain, st, final, hdr.get("content-type"), len(body), flush=True)
+              text = body.decode("utf-8", "replace")
+              print(text[:10000], flush=True)
+              try:
+                  data = json.loads(text)
+                  if data and isinstance(data[0], list):
+                      keys = data[0]
+                      all_rows.extend(dict(zip(keys, row)) for row in data[1:])
+              except Exception as e:
+                  print("PARSE_ERROR", domain, repr(e), flush=True)
 
-          hosts = [
-              "https://applieddigitalskills.withgoogle.com",
-              "https://csfirst.withgoogle.com",
-              "https://apski-production.appspot.com",
-              "https://apski-production.firebaseapp.com",
-              "https://apski-production.web.app",
-              "https://apski.appspot.com",
-              "https://applieddigitalskills.appspot.com",
-              "https://applied-digital-skills.appspot.com",
-              "https://engedu-elms-lms.appspot.com",
-              "https://elms-lms.appspot.com",
-              "https://engedu.appspot.com",
-          ]
-          paths = ["/v1/course/validate-join", "/api/v1/course/validate-join", "/_ah/api/v1/course/validate-join"]
-          param_names = ["request", "$req", "req"]
-          live_specs = []
-          for host in hosts:
-              for path in paths:
-                  for key in param_names:
-                      live_specs.append(("GET", host + path, {"params": {key: REQUEST}, "allow_redirects": False, "timeout": 12}))
-          print("=== LIVE CORRECT REQUEST ===", flush=True)
-          with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex:
-              for out in ex.map(fetch, live_specs):
-                  print(json.dumps(out, ensure_ascii=False), flush=True)
+          Path("cdx_rows.json").write_text(json.dumps(all_rows, ensure_ascii=False, indent=2))
+          print("ROW_COUNT", len(all_rows), flush=True)
 
-          exact_urls = []
-          for domain in ["applieddigitalskills.withgoogle.com", "csfirst.withgoogle.com", "apski-production.appspot.com"]:
-              exact_urls.append("https://" + domain + "/v1/course/validate-join?" + urllib.parse.urlencode({"request": REQUEST}))
-              exact_urls.append(f"https://{domain}/login/{CODE}")
-              exact_urls.append(f"https://{domain}/login-student?course_code={CODE}")
+          selected = {}
+          for row in all_rows:
+              original = row.get("original", "")
+              base = original.split("?",1)[0]
+              if not base.endswith(".js"):
+                  continue
+              name = base.rsplit("/",1)[-1]
+              key = (urllib.parse.urlsplit(original).netloc, name)
+              old = selected.get(key)
+              if old is None or row.get("timestamp", "") > old.get("timestamp", ""):
+                  selected[key] = row
 
-          print("=== WAYBACK EXACT ===", flush=True)
-          specs = [("GET", "https://archive.org/wayback/available", {"params": {"url": u}, "timeout": 25}) for u in exact_urls]
+          print("SELECTED", len(selected), flush=True)
+          for key,row in sorted(selected.items()):
+              print(key, row, flush=True)
+
+          priority_words = ["dashboard","course","class","student","teacher","project","lesson","unit","activity","common","profile","login","home","app"]
+          ordered = []
+          for key,row in selected.items():
+              name = key[1].lower()
+              score = sum(5 for w in priority_words if w in name)
+              try:length=int(row.get("length") or 0)
+              except:length=0
+              ordered.append((-score, length, key, row))
+          ordered.sort()
+          ordered = ordered[:180]
+
+          def download(item):
+              _,_,key,row = item
+              ts = row["timestamp"]
+              original = row["original"]
+              replay = f"https://web.archive.org/web/{ts}id_/{original}"
+              st,final,hdr,body = get(replay, 70, 15_000_000)
+              return key,row,replay,st,final,hdr,body
+
+          manifest=[]
           with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
-              for target, out in zip(exact_urls, ex.map(fetch, specs)):
-                  print("TARGET", target, json.dumps(out, ensure_ascii=False), flush=True)
+              for key,row,replay,st,final,hdr,body in ex.map(download, ordered):
+                  domain,name=key
+                  safe = re.sub(r"[^A-Za-z0-9_.-]", "_", domain+"__"+name)
+                  digest=hashlib.sha1(row["original"].encode()).hexdigest()[:8]
+                  path=outdir/(digest+"__"+safe)
+                  if st==200 and body and not body.startswith(b"ConnectionError"):
+                      path.write_bytes(body)
+                  manifest.append({"domain":domain,"name":name,"row":row,"replay":replay,"status":st,"final":final,"content_type":hdr.get("content-type"),"downloaded":len(body),"file":str(path) if path.exists() else None})
+                  print("DOWNLOAD", manifest[-1], flush=True)
+          Path("manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
 
-          print("=== WAYBACK ENDPOINT CDX ===", flush=True)
-          cdx_targets = [
-              "applieddigitalskills.withgoogle.com/v1/course/validate-join*",
-              "csfirst.withgoogle.com/v1/course/validate-join*",
-              "apski-production.appspot.com/v1/course/validate-join*",
-              f"applieddigitalskills.withgoogle.com/*{CODE}*",
-              f"csfirst.withgoogle.com/*{CODE}*",
-              f"apski-production.appspot.com/*{CODE}*",
-          ]
-          cdx_specs = [("GET", "https://web.archive.org/cdx/search/cdx", {"params": {
-              "url": t, "output": "json", "fl": "timestamp,original,statuscode,mimetype,length,digest",
-              "filter": "statuscode:200", "collapse": "urlkey", "limit": "10000"
-          }, "timeout": 45}) for t in cdx_targets]
-          with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
-              for target, out in zip(cdx_targets, ex.map(fetch, cdx_specs)):
-                  print("CDX_TARGET", target, json.dumps(out, ensure_ascii=False), flush=True)
-
-          print("=== WAYBACK REPLAY EXACT ===", flush=True)
-          replay_targets = exact_urls[0::3]
-          replay_specs = []
-          replay_meta = []
-          for target in replay_targets:
-              for timestamp in ["20220701", "20230101", "20240101", "20240601", "20250101"]:
-                  replay_meta.append((target, timestamp))
-                  replay_specs.append(("GET", f"https://web.archive.org/web/{timestamp}id_/{target}", {"allow_redirects": False, "timeout": 25}))
-          with concurrent.futures.ThreadPoolExecutor(max_workers=15) as ex:
-              for meta, out in zip(replay_meta, ex.map(fetch, replay_specs)):
-                  print("REPLAY", meta, json.dumps(out, ensure_ascii=False), flush=True)
-
-          print("=== FIREBASE PROJECT TESTS ===", flush=True)
-          api_key = "AIzaSyDF-3pZUvJoMwesJta9rM7EAUf0ZfnlU5k"
-          firebase_specs = [
-              ("GET", f"https://identitytoolkit.googleapis.com/v1/projects?key={api_key}", {"timeout": 25}),
-              ("POST", f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}", {"json": {"returnSecureToken": True}, "timeout": 25}),
-              ("GET", "https://firestore.googleapis.com/v1/projects/apski-production/databases/(default)/documents", {"timeout": 25}),
-              ("GET", "https://apski-production.firebaseio.com/.json", {"timeout": 25}),
-          ]
-          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-              for out in ex.map(fetch, firebase_specs):
-                  print(json.dumps(out, ensure_ascii=False), flush=True)
+          needle_re = re.compile(rb".{0,300}(?:v1/course|validate-join|class.?code|videos watched|student.?progress|lesson|assignment|unit|video|course_student_code|create-student-account).{0,500}", re.I|re.S)
+          endpoint_re = re.compile(rb"(?:https?://[^\"'\s)]+|/[A-Za-z0-9_./?=&%${}:~-]{3,})")
+          findings=[]
+          for p in outdir.iterdir():
+              data=p.read_bytes()
+              contexts=[]
+              for m in needle_re.finditer(data):
+                  contexts.append(m.group(0).decode("utf-8","replace"))
+                  if len(contexts)>=100:break
+              endpoints=sorted({m.decode("utf-8","replace") for m in endpoint_re.findall(data) if any(w in m.lower() for w in [b"course",b"class",b"lesson",b"video",b"student",b"unit",b"progress",b"api"])})
+              if contexts or endpoints:
+                  findings.append({"file":str(p),"contexts":contexts,"endpoints":endpoints[:1000]})
+          Path("findings.json").write_text(json.dumps(findings, ensure_ascii=False, indent=2))
+          print("FINDING_FILES", len(findings), flush=True)
+          for f in findings:
+              print("FINDING", f["file"], flush=True)
+              print(json.dumps(f, ensure_ascii=False)[:60000], flush=True)
           PY
-          cat result.txt
-      - name: Upload probe files
+          tar -czf archived-google-bundles.tar.gz bundles cdx_rows.json manifest.json findings.json result.txt
+      - name: Upload archived bundles
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ctf-room-correct-probe
-          path: |
-            result.txt
-            gcip_login.js
+          name: archived-google-education-bundles
+          path: archived-google-bundles.tar.gz
           if-no-files-found: warn
           retention-days: 1
