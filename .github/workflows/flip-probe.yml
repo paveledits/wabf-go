@@ -1,0 +1,54 @@
+name: exact-code-public-index-probe
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Search public URL indexes
+        shell: bash
+        run: |
+          python3 - <<'PY' > indexes.txt 2>&1
+          import concurrent.futures, json, urllib.parse, requests
+          code='c2xbypl'
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36'
+          urls=[]
+          for q in [code,f'filename:{code}',f'url:{code}',f'domain:{code}',f'page.url:*{code}*']:
+            urls.append('https://urlscan.io/api/v1/search/?'+urllib.parse.urlencode({'q':q,'size':100}))
+          for idx in ['CC-MAIN-2026-30','CC-MAIN-2026-26','CC-MAIN-2026-21','CC-MAIN-2026-16','CC-MAIN-2026-12','CC-MAIN-2025-30','CC-MAIN-2025-26','CC-MAIN-2025-21','CC-MAIN-2024-30','CC-MAIN-2024-26']:
+            for target in [f'*{code}*',f'*.withgoogle.com/*{code}*',f'*.google.com/*{code}*',f'flipgrid.com/*{code}*',f'flip.com/*{code}*']:
+              urls.append(f'https://index.commoncrawl.org/{idx}-index?'+urllib.parse.urlencode({'url':target,'output':'json','filter':'status:200'}))
+          urls += [
+            'https://otx.alienvault.com/api/v1/indicators/url/'+urllib.parse.quote('https://classroom.google.com/c/?cjc='+code,safe='')+'/general',
+            'https://otx.alienvault.com/api/v1/search/pulses?'+urllib.parse.urlencode({'q':code}),
+            'https://grep.app/api/search?'+urllib.parse.urlencode({'q':code}),
+            'https://searchcode.com/api/codesearch_I/?'+urllib.parse.urlencode({'q':code}),
+            'https://api.github.com/search/code?'+urllib.parse.urlencode({'q':'"'+code+'"'}),
+          ]
+          def get(url):
+            try:
+              r=requests.get(url,headers={'User-Agent':UA,'Accept':'application/json,text/plain,*/*'},timeout=30)
+              return {'url':url,'status':r.status_code,'type':r.headers.get('content-type'),'len':len(r.content),'body':r.text[:500000]}
+            except Exception as e:return {'url':url,'error':repr(e)}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
+            for x in ex.map(get,urls):
+              body=x.get('body','')
+              if body.strip() not in ['', '[]'] or x.get('status') not in [200,404]:
+                print(json.dumps(x,ensure_ascii=False),flush=True)
+          PY
+          cat indexes.txt
+      - name: Upload output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exact-code-public-indexes
+          path: indexes.txt
+          retention-days: 1
