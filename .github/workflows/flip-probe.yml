@@ -1,4 +1,4 @@
-name: bushbash-detail-probe
+name: exact-code-public-index-probe
 
 on:
   pull_request:
@@ -11,47 +11,44 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 5
     steps:
-      - name: Reverse challenge detail API
+      - name: Search public URL indexes
         shell: bash
         run: |
-          python3 - <<'PY' > bush-detail.txt 2>&1
-          import concurrent.futures, json, re, requests
-          BASE='https://bushbash.cssa.club'
+          python3 - <<'PY' > indexes.txt 2>&1
+          import concurrent.futures, json, urllib.parse, requests
+          code='c2xbypl'
           UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36'
-          assets=[
-            '/_app/immutable/chunks/challenges.C24INKI6.js',
-            '/_app/immutable/nodes/30.B2rEhVGm.js',
-            '/_app/immutable/chunks/page.BtwN4EXQ.js',
-            '/_app/immutable/chunks/default.CoguAwf4.js'
+          urls=[]
+          for q in [code,f'filename:{code}',f'url:{code}',f'domain:{code}',f'page.url:*{code}*']:
+            urls.append('https://urlscan.io/api/v1/search/?'+urllib.parse.urlencode({'q':q,'size':100}))
+          for idx in ['CC-MAIN-2026-30','CC-MAIN-2026-26','CC-MAIN-2026-21','CC-MAIN-2026-16','CC-MAIN-2026-12','CC-MAIN-2025-30','CC-MAIN-2025-26','CC-MAIN-2025-21','CC-MAIN-2024-30','CC-MAIN-2024-26']:
+            for target in [f'*{code}*',f'*.withgoogle.com/*{code}*',f'*.google.com/*{code}*',f'flipgrid.com/*{code}*',f'flip.com/*{code}*']:
+              urls.append(f'https://index.commoncrawl.org/{idx}-index?'+urllib.parse.urlencode({'url':target,'output':'json','filter':'status:200'}))
+          urls += [
+            'https://otx.alienvault.com/api/v1/indicators/url/'+urllib.parse.quote('https://classroom.google.com/c/?cjc='+code,safe='')+'/general',
+            'https://otx.alienvault.com/api/v1/search/pulses?'+urllib.parse.urlencode({'q':code}),
+            'https://grep.app/api/search?'+urllib.parse.urlencode({'q':code}),
+            'https://searchcode.com/api/codesearch_I/?'+urllib.parse.urlencode({'q':code}),
+            'https://api.github.com/search/code?'+urllib.parse.urlencode({'q':'"'+code+'"'}),
           ]
           def get(url):
             try:
-              r=requests.get(url,headers={'User-Agent':UA,'Accept':'*/*'},timeout=20)
-              return {'url':url,'status':r.status_code,'type':r.headers.get('content-type'),'len':len(r.content),'body':r.text[:2000000]}
+              r=requests.get(url,headers={'User-Agent':UA,'Accept':'application/json,text/plain,*/*'},timeout=30)
+              return {'url':url,'status':r.status_code,'type':r.headers.get('content-type'),'len':len(r.content),'body':r.text[:500000]}
             except Exception as e:return {'url':url,'error':repr(e)}
-          for x in map(get,[BASE+a for a in assets]):
-            print('ASSET',json.dumps(x,ensure_ascii=False),flush=True)
-          ids=[7,9,10,12,26]
-          slugs=['the-cssa-hackerman-i','the-cssa-hackerman-ii','the-cssa-hackerman-iii','the-eye','membership-perks']
-          urls=[]
-          for i in ids:
-            urls += [f'{BASE}/api/challenges/{i}',f'{BASE}/api/challenge/{i}',f'{BASE}/api/challenges?id={i}',f'{BASE}/api/challenge?id={i}']
-          for slug in slugs:
-            urls += [f'{BASE}/api/challenges/{slug}',f'{BASE}/api/challenge/{slug}',f'{BASE}/api/challenges?slug={slug}',f'{BASE}/api/challenge?slug={slug}',f'{BASE}/challenges/{slug}/__data.json']
-          with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+          with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
             for x in ex.map(get,urls):
-              body=(x.get('body') or '').lower()
-              x['hit']=any(k in body for k in ['c2xbypl','does ppl still watch vlogs','share my vlogs','ellipsis'])
-              if x.get('status') != 404 or x['hit']:
-                print('PROBE',json.dumps(x,ensure_ascii=False),flush=True)
+              body=x.get('body','')
+              if body.strip() not in ['', '[]'] or x.get('status') not in [200,404]:
+                print(json.dumps(x,ensure_ascii=False),flush=True)
           PY
-          cat bush-detail.txt
+          cat indexes.txt
       - name: Upload output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bushbash-detail-probe
-          path: bush-detail.txt
+          name: exact-code-public-indexes
+          path: indexes.txt
           retention-days: 1
