@@ -1,4 +1,4 @@
-name: public-ctf-challenge-scan
+name: bushbash-public-route-probe
 
 on:
   pull_request:
@@ -9,46 +9,51 @@ permissions:
   contents: read
 
 jobs:
-  scan:
+  probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 4
     steps:
-      - name: Scan public challenge endpoints
+      - name: Fetch BushBash public route data
         shell: bash
         run: |
-          python3 - <<'PY' > ctf-scan.txt 2>&1
-          import concurrent.futures, json, requests
+          python3 - <<'PY' > bushbash.txt 2>&1
+          import concurrent.futures, json, re, urllib.parse, requests
+          BASE='https://bushbash.cssa.club'
           UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36'
-          bases=[
-            'https://bushbash.cssa.club',
-            'https://ctfd.diverctf.org',
-            'https://ctf.l3ak.team',
-            'https://ctf.themctf.com',
-            'https://ctf.flagaholic.xyz',
-            'https://play.flagaholic.xyz',
-            'https://chall.flagaholic.xyz',
-            'https://ctf.flagaholic.com',
+          paths=[
+            '/challenges/__data.json','/challenges/__data.json?x-sveltekit-invalidated=11',
+            '/__data.json','/api/challenges','/api/challenge','/api/getChallenges','/api/v1/challenge',
+            '/_app/immutable/entry/app.JejHXHYk.js','/_app/immutable/entry/start.BSPZr-m5.js',
+            '/_app/immutable/chunks/entry.DtQAtgh9.js','/_app/immutable/chunks/index-client.WXfFUu-k.js'
           ]
-          paths=['/api/v1/challenges','/api/v1/challs','/api/v2/challs','/challenges','/api/v1/configs','/api/v1/integrations/client/config','/api/v2/integrations/client/config']
-          def get(spec):
-            base,path=spec
+          def get(path):
             try:
-              r=requests.get(base+path,headers={'User-Agent':UA,'Accept':'application/json,text/html,*/*'},allow_redirects=False,timeout=18)
-              return {'base':base,'path':path,'status':r.status_code,'location':r.headers.get('location'),'type':r.headers.get('content-type'),'len':len(r.content),'body':r.text[:1000000]}
-            except Exception as e:return {'base':base,'path':path,'error':repr(e)}
-          specs=[(b,p) for b in bases for p in paths]
-          with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex:
-            for x in ex.map(get,specs):
-              blob=(x.get('body') or '').lower()
-              hit=any(k in blob for k in ['c2xbypl','does ppl still watch vlogs','share my vlogs','remove the ellipsis'])
-              x['exact_hit']=hit
-              print(json.dumps(x,ensure_ascii=False),flush=True)
+              r=requests.get(BASE+path,headers={'User-Agent':UA,'Accept':'*/*'},timeout=20)
+              return {'path':path,'status':r.status_code,'type':r.headers.get('content-type'),'len':len(r.content),'body':r.text[:2000000]}
+            except Exception as e:return {'path':path,'error':repr(e)}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
+            results=list(ex.map(get,paths))
+          for x in results: print('RESULT',json.dumps(x,ensure_ascii=False),flush=True)
+          assets=set()
+          for x in results:
+            body=x.get('body','')
+            for m in re.findall(r'["\'`](/_app/immutable/[^"\'`]+\.js)["\'`]',body): assets.add(BASE+m)
+          print('ASSETS',json.dumps(sorted(assets)),flush=True)
+          def getu(url):
+            try:
+              r=requests.get(url,headers={'User-Agent':UA},timeout=20)
+              return {'url':url,'status':r.status_code,'type':r.headers.get('content-type'),'len':len(r.content),'body':r.text[:2000000]}
+            except Exception as e:return {'url':url,'error':repr(e)}
+          with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
+            for x in ex.map(getu,sorted(assets)):
+              blob=x.get('body','').lower(); x['hit']=any(k in blob for k in ['c2xbypl','does ppl still watch vlogs','share my vlogs','remove the ellipsis'])
+              print('ASSET',json.dumps(x,ensure_ascii=False),flush=True)
           PY
-          cat ctf-scan.txt
-      - name: Upload scan
+          cat bushbash.txt
+      - name: Upload output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: public-ctf-challenge-scan
-          path: ctf-scan.txt
+          name: bushbash-public-route-data
+          path: bushbash.txt
           retention-days: 1
