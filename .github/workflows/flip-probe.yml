@@ -1,4 +1,4 @@
-name: l3ak-public-metadata-probe
+name: l3ak-public-api-probe
 
 on:
   pull_request:
@@ -11,71 +11,34 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 4
     steps:
-      - name: Fetch public CTF metadata
+      - name: Fetch public RCTF API
         shell: bash
         run: |
-          python3 - <<'PY' > l3ak-public.txt 2>&1
-          import concurrent.futures, json, re, urllib.parse
-          import requests
-
+          python3 - <<'PY' > l3ak-api.txt 2>&1
+          import concurrent.futures, json, requests
           BASE="https://ctf.l3ak.team"
           UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
           paths=[
-            "/", "/challenges", "/api/v1/configs", "/api/v1/challenges", "/api/v1/scoreboard",
-            "/api/v1/statistics/challenges/solves", "/api/v1/users/me", "/robots.txt", "/sitemap.xml",
+            "/api/v1/challs", "/api/v2/challs",
+            "/api/v1/integrations/client/config", "/api/v2/integrations/client/config",
+            "/api/v1/leaderboard/now", "/api/v2/leaderboard/now", "/api/v2/leaderboard/challs",
+            "/api/v1/leaderboard/graph", "/api/v2/leaderboard/graph",
           ]
-          def fetch(path):
+          def get(path):
             try:
-              r=requests.get(BASE+path,headers={"User-Agent":UA,"Accept":"*/*"},allow_redirects=False,timeout=20)
-              return {"path":path,"status":r.status_code,"location":r.headers.get("location"),"type":r.headers.get("content-type"),"len":len(r.content),"headers":dict(r.headers),"body":r.text[:300000]}
+              r=requests.get(BASE+path,headers={"User-Agent":UA,"Accept":"application/json"},allow_redirects=False,timeout=20)
+              return {"path":path,"status":r.status_code,"headers":dict(r.headers),"body":r.text}
             except Exception as e:return {"path":path,"error":repr(e)}
-          with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
-            results=list(ex.map(fetch,paths))
-          for x in results: print("RESULT",json.dumps(x,ensure_ascii=False),flush=True)
-
-          assets=set()
-          for x in results:
-            body=x.get("body","")
-            for m in re.findall(r'(?:src|href)=["\']([^"\']+)',body,re.I):
-              if m.startswith("//"):m="https:"+m
-              elif m.startswith("/"):m=BASE+m
-              elif not m.startswith("http"):m=urllib.parse.urljoin(BASE+"/",m)
-              if any(y in m.lower() for y in [".js",".css","/themes/","/assets/"]):assets.add(m)
-          print("ASSETS",json.dumps(sorted(assets),ensure_ascii=False),flush=True)
-          def geta(url):
-            try:
-              r=requests.get(url,headers={"User-Agent":UA},timeout=25)
-              return {"url":url,"status":r.status_code,"type":r.headers.get("content-type"),"len":len(r.content),"body":r.text[:500000]}
-            except Exception as e:return {"url":url,"error":repr(e)}
-          with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
-            for x in ex.map(geta,sorted(assets)):
-              print("ASSET",json.dumps(x,ensure_ascii=False),flush=True)
-
-          queries=[
-            '"does ppl still watch vlogs"',
-            '"i have a room to share my vlogs sometimes"',
-            '"c2xbypl"',
-            '"remove the ellipsis at the end"',
-          ]
-          for q in queries:
-            for endpoint in [
-              "https://api.github.com/search/code?q="+urllib.parse.quote(q),
-              "https://grep.app/api/search?q="+urllib.parse.quote(q),
-              "https://www.google.com/search?q="+urllib.parse.quote(q),
-              "https://www.bing.com/search?q="+urllib.parse.quote(q),
-            ]:
-              try:
-                r=requests.get(endpoint,headers={"User-Agent":UA,"Accept":"application/json,text/html,*/*"},timeout=25)
-                print("SEARCH",q,endpoint,r.status_code,r.headers.get("content-type"),r.text[:100000],flush=True)
-              except Exception as e: print("SEARCH_ERROR",q,endpoint,repr(e),flush=True)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+            for x in ex.map(get,paths): print(json.dumps(x,ensure_ascii=False),flush=True)
           PY
-          cat l3ak-public.txt
-      - name: Upload public metadata
+          cat l3ak-api.txt
+      - name: Upload API output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: l3ak-public-metadata
-          path: l3ak-public.txt
+          name: l3ak-public-api
+          path: l3ak-api.txt
           retention-days: 1
